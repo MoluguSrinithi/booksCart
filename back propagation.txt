@@ -1,0 +1,335 @@
+# ============================================================
+# Step 1: Import Libraries and Load Dataset as: /srv/shareddata/datasets/3cse-c
+# ============================================================
+import os, glob, zipfile
+import numpy as np
+import matplotlib.pyplot as plt
+from PIL import Image
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import OneHotEncoder
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Flatten
+
+# ---- Set dataset path ----
+dataset_path = "/srv/shareddata/datasets/3cse-c"
+
+# ---- If it's a ZIP file, extract it once ----
+if dataset_path.endswith(".zip"):
+    extract_dir = dataset_path.replace(".zip", "")
+    if not os.path.exists(extract_dir):
+        with zipfile.ZipFile(dataset_path, 'r') as zip_ref:
+            zip_ref.extractall(extract_dir)
+    dataset_path = extract_dir  # now point to extracted folder
+
+# ---- Read all PNG files ----
+image_paths = glob.glob(os.path.join(dataset_path, "*.png"))
+
+# ---- Keep only first 100 images ----
+image_paths = image_paths[:100]
+
+print("Found images:", len(image_paths))
+
+images, labels = [], []
+
+for img_path in image_paths:
+    filename = os.path.basename(img_path)
+    # expecting filenames like something_like_<label>.png
+    label = int(filename.split("_")[-1].split(".")[0])
+    img = Image.open(img_path).convert("L")   # grayscale
+    img = np.array(img) / 255.0               # normalize to [0,1]
+    images.append(img)
+    labels.append(label)
+
+images = np.array(images)
+labels = np.array(labels)
+
+# ---- Visualize some samples ----
+plt.figure(figsize=(10, 4))  # width=10 inches, height=4 inches
+for i in range(10):          # loop i from 0 to 9
+    plt.subplot(2, 5, i + 1) # 2 rows, 5 cols, position i+1
+    plt.imshow(images[i], cmap='gray')
+    plt.title(f"Label: {labels[i]}")
+    plt.axis('off')          # hide ticks and grid
+plt.tight_layout()
+plt.show()
+
+
+
+
+
+# ============================================================
+# Step 2: Data Preprocessing
+# ============================================================
+
+# 1) Flatten all images
+n_samples = images.shape[0]
+X = images.reshape(n_samples, -1)  # shape: (n_samples, number_of_features)
+
+# 2) OneHotEncode labels
+try:
+    encoder = OneHotEncoder(sparse=False)  # works on many sklearn versions
+except TypeError:
+    # for newer sklearn, param name changed
+    encoder = OneHotEncoder(sparse_output=False)
+
+y_onehot = encoder.fit_transform(labels.reshape(-1, 1))  # shape: (n_samples, n_classes)
+
+# 3) Train/Test split
+# We'll produce: X_train, X_test, y_train, y_test (y_* are 1-D raw labels)
+X_train, X_test, y_train, y_test, y_train_oh, y_test_oh = train_test_split(
+    X, labels, y_onehot, test_size=0.2, random_state=42, stratify=labels
+)
+
+# Print shapes as requested
+print(f"Train shape: {X_train.shape}, Test shape: {y_test.shape}")
+
+
+
+
+
+# ============================================================
+# Step 3: Initialize network parameters
+# ============================================================
+
+np.random.seed(42)
+
+# As specified: input_size = 28*28
+input_size = 28 * 28
+hidden_size = 10
+output_size = y_onehot.shape[1]  # number of classes from encoder
+
+# Initialize with small random weights and zero biases
+W1 = 0.01 * np.random.randn(input_size, hidden_size)  # (input_size, hidden_size)
+b1 = np.zeros((1, hidden_size))                       # (1, hidden_size)
+W2 = 0.01 * np.random.randn(hidden_size, output_size) # (hidden_size, output_size)
+b2 = np.zeros((1, output_size))                       # (1, output_size)
+
+print("W1 shape:", W1.shape)
+print("b1 shape:", b1.shape)
+print("W2 shape:", W2.shape)
+print("b2 shape:", b2.shape)
+
+
+
+# ============================================================
+# Step 4: Activation functions + derivatives
+# ============================================================
+
+def relu(x):
+    return np.maximum(0, x)
+
+def relu_derivative(x):
+    # derivative wrt x: 1 for x>0 else 0
+    grad = np.zeros_like(x)
+    grad[x > 0] = 1.0
+    return grad
+
+def softmax(x):
+    # supports 1D or 2D arrays
+    if x.ndim == 1:
+        x_shift = x - np.max(x)
+        exp_x = np.exp(x_shift)
+        return exp_x / (np.sum(exp_x) + 1e-8)
+    else:
+        x_shift = x - np.max(x, axis=1, keepdims=True)
+        exp_x = np.exp(x_shift)
+        return exp_x / (np.sum(exp_x, axis=1, keepdims=True) + 1e-8)
+
+def softmax_derivative(predictions, label):
+    """
+    For cross-entropy loss with softmax, the gradient dL/dZ2 simplifies to:
+    predictions - one_hot_labels
+    This returns that quantity; averaging by batch size is done in backprop.
+    """
+    return predictions - label
+
+
+
+
+# ============================================================
+# Step 5: Forward Propagation
+# ============================================================
+
+def forward_propagation(X, W1, b1, W2, b2):
+    # Z1: (n_samples, hidden_size)
+    Z1 = X @ W1 + b1
+    # A1: (n_samples, hidden_size)
+    A1 = relu(Z1)
+    # Z2: (n_samples, output_size)
+    Z2 = A1 @ W2 + b2
+    # A2: (n_samples, output_size)
+    A2 = softmax(Z2)
+    return Z1, A1, Z2, A2
+
+
+
+
+
+
+# ============================================================
+# Step 6: Cross-Entropy Loss
+# ============================================================
+
+def cross_entropy_loss(A2, y):
+    """
+    A2: (n_samples, n_classes) predicted probabilities (softmax output)
+    y : (n_samples, n_classes) one-hot encoded true labels
+    Returns scalar average loss.
+    """
+    m = y.shape[0]
+    # clamp inside log via epsilon for numerical stability
+    loss = -np.sum(y * np.log(A2 + 1e-8)) / m
+    return loss
+
+
+
+
+
+
+# ============================================================
+# Step 7: Backward Propagation
+# ============================================================
+
+def backward_propagation(X, y, Z1, A1, A2, W2):
+    """
+    X : (n_samples, input_size)
+    y : (n_samples, n_classes) one-hot
+    Z1: (n_samples, hidden_size)
+    A1: (n_samples, hidden_size)
+    A2: (n_samples, n_classes)
+    W2: (hidden_size, n_classes)
+    Returns: dW1, db1, dW2, db2
+    """
+    m = X.shape[0]
+
+    # Output layer gradients
+    dZ2 = A2 - y                                  # (n_samples, n_classes)
+    dW2 = (A1.T @ dZ2) / m                        # (hidden_size, n_classes)
+    db2 = np.sum(dZ2, axis=0, keepdims=True) / m  # (1, n_classes)
+
+    # Hidden layer gradients
+    dA1 = dZ2 @ W2.T                              # (n_samples, hidden_size)
+    dZ1 = dA1 * relu_derivative(Z1)               # (n_samples, hidden_size)
+    dW1 = (X.T @ dZ1) / m                         # (input_size, hidden_size)
+    db1 = np.sum(dZ1, axis=0, keepdims=True) / m  # (1, hidden_size)
+
+    return dW1, db1, dW2, db2
+
+
+
+
+# ============================================================
+# Step 9: Update Parameters
+# ============================================================
+
+def update_parameters(W1, b1, W2, b2, dW1, db1, dW2, db2, learning_rate):
+    W1 = W1 - learning_rate * dW1
+    b1 = b1 - learning_rate * db1
+    W2 = W2 - learning_rate * dW2
+    b2 = b2 - learning_rate * db2
+    return W1, b1, W2, b2
+
+
+
+
+# Training parameters
+epochs = 1000
+learning_rate = 0.1  # Increased from 0.01 based on your PDF output
+
+# Lists to store training history
+train_losses = []
+train_accuracies = []
+
+# Training loop
+for epoch in range(epochs):
+    # Forward propagation
+    Z1, A1, Z2, A2 = forward_propagation(X_train, W1, b1, W2, b2)
+    
+    # Compute loss
+    loss = cross_entropy_loss(A2, y_train)  # Fixed parameter order
+    
+    # Backward propagation
+    dW1, db1, dW2, db2 = backward_propagation(X_train, y_train, Z1, A1, A2, W2)
+    
+    # Update parameters
+    W1, b1, W2, b2 = update_parameters(W1, b1, W2, b2, dW1, db1, dW2, db2, learning_rate)
+    
+    # Calculate accuracy
+    train_preds = (A2 > 0.5).astype(int)
+    train_acc = np.mean(np.argmax(y_train, axis=1) == np.argmax(train_preds, axis=1))
+    
+    # Store history
+    train_losses.append(loss)
+    train_accuracies.append(train_acc)
+    
+    # Print loss every 100 epochs
+    if epoch % 100 == 0:
+        print(f"Epoch {epoch}, Loss: {loss:.4f}, Accuracy: {train_acc*100:.2f}%")
+
+
+
+def predict(X, W1, b1, W2, b2):
+    """Make predictions using trained model"""
+    _, _, _, A2 = forward_propagation(X, W1, b1, W2, b2)
+    return (A2 > 0.5).astype(int)
+
+def accuracy(y_true, y_pred):
+    """Calculate classification accuracy"""
+    return np.mean(np.argmax(y_true, axis=1) == np.argmax(y_pred, axis=1))
+
+# Evaluate on training set
+train_preds = predict(X_train, W1, b1, W2, b2)
+train_acc = accuracy(y_train, train_preds)
+
+# Evaluate on test set
+test_preds = predict(X_test, W1, b1, W2, b2)
+test_acc = accuracy(y_test, test_preds)
+
+print("\nModel Evaluation:")
+print(f"Training Accuracy: {train_acc * 100:.2f}%")
+print(f"Test Accuracy: {test_acc * 100:.2f}%")
+
+
+
+
+
+
+# Plot Training History
+# ============================================================
+plt.figure(figsize=(12,4))
+plt.subplot(1,2,1)
+plt.plot(train_losses, label='Train Loss')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.title("Loss over Epochs")
+
+plt.subplot(1,2,2)
+plt.plot(train_accuracies, label='Train Acc')
+plt.xlabel('Epochs')
+plt.ylabel('Accuracy')
+plt.legend()
+plt.title("Accuracy over Epochs")
+plt.show()
+
+
+
+
+
+# ============================================================
+# Predict on a Sample Image
+# ============================================================
+idx = 3
+sample_img = X_test[idx].reshape(1, 784)
+_, _, _, A2_sample = forward_propagation(sample_img, W1, b1, W2, b2)
+predicted_label = np.argmax(A2_sample)
+
+plt.imshow(X_test[idx].reshape(28,28), cmap="gray")
+plt.title(f"Predicted: {predicted_label}")
+plt.axis("off")
+plt.show()
+
+# Show the actual label for comparison
+actual_label = np.argmax(y_test[idx])
+print(f"Actual label: {actual_label}")
