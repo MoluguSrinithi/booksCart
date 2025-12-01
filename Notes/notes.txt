@@ -1,0 +1,96 @@
+pipeline{
+    agent any
+    tools{
+        jdk 'JAVA_HOME'
+        maven 'MAVEN_HOME'
+    }
+    stages{
+        stage('git repo & clean'){
+            steps {
+                bat "rmdir /s /q Srinithi_Jenkins_Maven || exit 0"
+                bat "git clone https://github.com/MoluguSrinithi/Srinithi_Jenkins_Maven.git"
+                bat "mvn clean -f Srinithi_Jenkins_Maven/pom.xml"
+            }
+        }
+        stage('install'){
+            steps {
+                bat "mvn install -f Srinithi_Jenkins_Maven/pom.xml"
+            }
+        }
+        stage('test'){
+            steps {
+                bat "mvn test -f Srinithi_Jenkins_Maven/pom.xml"
+            }
+        }
+        stage('package'){
+            steps {
+                bat "mvn package -f Srinithi_Jenkins_Maven/pom.xml"
+            }
+        }
+        
+    }
+
+-----------------------------------
+
+pipeline {
+    agent any
+
+    tools {
+        jdk 'JAVA_HOME'
+        maven 'MAVEN_HOME'
+    }
+
+    stages {
+
+        stage('Clone Repository') {
+            steps {
+                bat 'rmdir /s /q Srinithi-Maven-Web-App || exit 0'
+                bat 'git clone https://github.com/MoluguSrinithi/Srinithi-Maven-Web-App.git'
+            }
+        }
+
+        stage('Build Maven Project') {
+            steps {
+                bat 'mvn clean install -f Srinithi-Maven-Web-App'
+            }
+        }
+
+        stage('Run Tests') {
+            steps {
+                bat 'mvn test -f Srinithi-Maven-Web-App'
+            }
+        }
+
+        stage('Package WAR') {
+            steps {
+                bat 'mvn package -f Srinithi-Maven-Web-App'
+            }
+        }
+
+        stage('Archive WAR Artifact') {
+            steps {
+                archiveArtifacts artifacts: 'Srinithi-Maven-Web-App/target/*.war', fingerprint: true
+            }
+        }
+
+        stage('Deploy to Tomcat') {
+            steps {
+                echo 'Copying WAR to Tomcat...'
+                bat 'copy "Srinithi-Maven-Web-App\\target\\Harshitha_Web_App.war" "C:\\Users\\Srinithi\\Downloads\\apache-tomcat-9.0.109\\webapps"'
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Build and Deployment Successful!"
+        }
+        failure {
+            echo "Build Failed!"
+        }
+    }
+}
+}
+
+
+
